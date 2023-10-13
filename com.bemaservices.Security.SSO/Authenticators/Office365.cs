@@ -179,7 +179,7 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
         private string GetRedirectUrl( HttpRequest request )
         {
-            Uri uri = new Uri( request.Url.ToString() );
+            Uri uri = new Uri( request.UrlProxySafe().ToString() );
             return uri.Scheme + "://" + uri.GetComponents( UriComponents.HostAndPort, UriFormat.UriEscaped ) + uri.LocalPath;
         }
 
