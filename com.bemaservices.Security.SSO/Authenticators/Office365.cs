@@ -3,6 +3,7 @@ using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Net;
 using System.Web;
+using System.Web.Security;
 using Newtonsoft.Json;
 using RestSharp;
 using Rock;
@@ -83,10 +84,11 @@ namespace com.bemaservices.Security.SSO.Authenticators
             string clientId = GetAttributeValue( "ClientId" );
             string returnUrl = request.QueryString["returnurl"];
             string redirectUri = GetRedirectUrl( request );
-            string newUrl = string.Format( "{0}?client_id={1}&redirect_uri={2}&response_type=code&scope=openid https://graph.microsoft.com/User.Read",
+            string newUrl = string.Format( "{0}?client_id={1}&redirect_uri={2}&response_type=code&state={3}&scope=openid https://graph.microsoft.com/User.Read",
                 authorizationURI,
                 clientId,
-                HttpUtility.UrlEncode( redirectUri )
+                HttpUtility.UrlEncode( redirectUri ),
+                HttpUtility.UrlEncode( returnUrl ?? FormsAuthentication.DefaultUrl )
             );
 
             return new Uri( newUrl );
@@ -102,7 +104,7 @@ namespace com.bemaservices.Security.SSO.Authenticators
         public override Boolean Authenticate( HttpRequest request, out string username, out string returnUrl )
         {
             username = string.Empty;
-            returnUrl = request.QueryString["redirect_uri"];
+            returnUrl = request.QueryString["state"];
             string redirectUri = GetRedirectUrl( request );
             string tokenURI = GetAttributeValue( "TokenURI" );
             bool debugModeEnabled = GetAttributeValue( "EnableDebugMode" ).AsBoolean();
