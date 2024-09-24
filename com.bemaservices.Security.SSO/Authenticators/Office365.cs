@@ -334,6 +334,17 @@ namespace com.bemaservices.Security.SSO.Authenticators
             }
         }
 
+        /// <summary>
+        /// Determines whether two-factor authentication is handled by this authentication component.
+        /// </summary>
+        /// <returns>
+        ///   <c>true</c> if two-factor authentication is handled by this authentication component; otherwise, <c>false</c>.
+        /// </returns>
+        public override bool IsConfiguredForTwoFactorAuthentication()
+        {
+            return true;
+        }
+
         #region Models
 
         ///<summary>
