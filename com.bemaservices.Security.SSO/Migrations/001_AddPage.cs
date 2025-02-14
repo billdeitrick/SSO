@@ -15,7 +15,7 @@ namespace com.bemaservices.Security.SSO.Migrations
             var pageExist = PageCache.Get( Page.SSOLoginPage ) != null ? true : false;
 
             RockMigrationHelper.AddPage( true, Rock.SystemGuid.Page.SECURITY_ADMIN_TOOLS, "DEC70939-E041-4C9E-A4AA-5A15C0C8391F", "SSO Login Page", "", Page.SSOLoginPage );
-            RockMigrationHelper.AddPageRoute( Page.SSOLoginPage, "SSO" );
+            RockMigrationHelper.AddOrUpdatePageRoute( Page.SSOLoginPage, "SSO" );
 
             if ( pageExist == false )
             {
