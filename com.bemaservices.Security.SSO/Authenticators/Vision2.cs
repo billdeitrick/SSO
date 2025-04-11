@@ -4,6 +4,7 @@ using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Net;
 using System.Web;
+using System.Web.Security;
 using Newtonsoft.Json;
 using RestSharp;
 using Rock;
@@ -11,7 +12,10 @@ using Rock.Attribute;
 using Rock.Data;
 using Rock.Model;
 using Rock.Security;
+using Rock.Security.Authentication;
+using Rock.Security.Authentication.ExternalRedirectAuthentication;
 using Rock.Web.Cache;
+using static com.bemaservices.Security.SSO.Authenticators.Office365;
 
 namespace com.bemaservices.Security.SSO.Authenticators
 {
@@ -27,7 +31,7 @@ namespace com.bemaservices.Security.SSO.Authenticators
     [TextField("Client Id", "This is the Client Id from the api authentication page in the Vision2 administration portal", true, "", "", 3)]
     [TextField("Client Secret", "This is the Client Secret you will obtain from the api authentication page in the Vision2 administration portal", true, "", "", 4)]
     [BooleanField("Enable Debug Mode", "Enabling this will generate exceptions at each point of the authentication process. This is very useful for troubleshooting.", false, "", 5)]
-    public class Vision2 : AuthenticationComponent
+    public class Vision2 : AuthenticationComponent, IExternalRedirectAuthentication
     {
         private const string EXCEPTION_DEBUG_TEXT = "Vision2 SSO Debug";
 
@@ -63,6 +67,11 @@ namespace com.bemaservices.Security.SSO.Authenticators
         public override Boolean IsReturningFromAuthentication(HttpRequest request)
         {
             return (!String.IsNullOrWhiteSpace(request.QueryString["code"]));
+        }
+
+        public bool IsReturningFromExternalAuthentication( IDictionary<string, string> parameters )
+        {
+            return !string.IsNullOrWhiteSpace( parameters.GetValueOrNull( "code" ) );
         }
 
         /// <summary>
@@ -159,6 +168,71 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
         }
 
+        public ExternalRedirectAuthenticationResult Authenticate( ExternalRedirectAuthenticationOptions options )
+        {
+            var result = new ExternalRedirectAuthenticationResult
+            {
+                UserName = string.Empty,
+                ReturnUrl = options.Parameters.GetValueOrNull( "State" )
+            };
+            string tokenURI = GetAttributeValue( "TokenURI" );
+            bool debugModeEnabled = GetAttributeValue( "EnableDebugMode" ).AsBoolean();
+
+
+            try
+            {
+                // Get a new OAuth Access Token for the 'code' that was returned from the Office 365 user consent redirect
+                var restClient = new RestClient( tokenURI );
+                var restRequest = new RestRequest( Method.POST );
+                restRequest.AddParameter( "code", options.Parameters.GetValueOrNull( "code" ) );
+                restRequest.AddParameter( "client_id", GetAttributeValue( "ClientId" ) );
+                restRequest.AddParameter( "client_secret", GetAttributeValue( "ClientSecret" ) );
+                var restResponse = restClient.Execute( restRequest );
+
+                if ( debugModeEnabled )
+                {
+                    var exceptionText = string.Format( "Access Token: {0}", restResponse.Content );
+                    ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                }
+
+                if ( restResponse.StatusCode == HttpStatusCode.OK )
+                {
+                    var accesstokenresponse = JsonConvert.DeserializeObject<V2APIResult<V2OAuthClientResponse>>( restResponse.Content );
+                    
+                    if ( debugModeEnabled )
+                    {
+                        var exceptionText = string.Format( "User: {0}", restResponse.Content );
+                        ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                    }
+
+                    if ( accesstokenresponse.HttpStatusCode == ( int ) HttpStatusCode.OK )
+                    {
+                        string accessToken = accesstokenresponse.Data.access_token;
+                        result.UserName = GetVision2User( accesstokenresponse.Data.profile, accesstokenresponse.Data.user_id );
+                        result.IsAuthenticated = !string.IsNullOrWhiteSpace( result.UserName );
+
+                        if ( debugModeEnabled )
+                        {
+                            var exceptionText = string.Format( "UserName: {0}", result.UserName );
+                            ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                        }
+                    }
+                }
+                else
+                {
+                    var exceptionText = string.Format( "User: {0}", restResponse.Content );
+                    ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                }
+            }
+
+            catch ( Exception ex )
+            {
+                ExceptionLogService.LogException( ex, HttpContext.Current );
+            }
+
+            return result;
+        }
+
         /// <summary>
         /// Gets the URL of an image that should be displayed.
         /// </summary>
@@ -173,6 +247,22 @@ namespace com.bemaservices.Security.SSO.Authenticators
         {
             Uri uri = new Uri( request.UrlProxySafe().ToString() );
             return uri.Scheme + "://" + uri.GetComponents( UriComponents.HostAndPort, UriFormat.UriEscaped ) + uri.LocalPath;
+        }
+
+        public Uri GenerateExternalLoginUrl( string externalProviderReturnUrl, string successfulAuthenticationRedirectUrl )
+        {
+            string authorizationURI = GetAttributeValue( "AuthorizationURI" );
+            string clientId = GetAttributeValue( "ClientId" );
+            string returnUrl = HttpUtility.UrlEncode( externalProviderReturnUrl );
+            string redirectUri = HttpUtility.UrlEncode( successfulAuthenticationRedirectUrl ?? FormsAuthentication.DefaultUrl );
+            string newUrl = string.Format( "{0}?client_id={1}&redirect_uri={2}&state={3}&response_type=code&scope=openid",
+                authorizationURI,
+                clientId,
+                returnUrl,
+                redirectUri
+            );
+
+            return new Uri( newUrl );
         }
 
         /// <summary>
@@ -318,6 +408,17 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
                 return username;
             }
+        }
+
+        /// <summary>
+        /// Determines whether two-factor authentication is handled by this authentication component.
+        /// </summary>
+        /// <returns>
+        ///   <c>true</c> if two-factor authentication is handled by this authentication component; otherwise, <c>false</c>.
+        /// </returns>
+        public override bool IsConfiguredForTwoFactorAuthentication()
+        {
+            return true;
         }
 
         #region Models
