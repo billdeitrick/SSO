@@ -1,8 +1,10 @@
 ﻿using System;
+using System.Collections.Generic;
 using System.ComponentModel;
 using System.ComponentModel.Composition;
 using System.Net;
 using System.Web;
+using System.Web.Security;
 using Newtonsoft.Json;
 using RestSharp;
 using Rock;
@@ -10,7 +12,10 @@ using Rock.Attribute;
 using Rock.Data;
 using Rock.Model;
 using Rock.Security;
+using Rock.Security.Authentication;
+using Rock.Security.Authentication.ExternalRedirectAuthentication;
 using Rock.Web.Cache;
+using static com.bemaservices.Security.SSO.Authenticators.Office365;
 
 namespace com.bemaservices.Security.SSO.Authenticators
 {
@@ -25,7 +30,7 @@ namespace com.bemaservices.Security.SSO.Authenticators
     [TextField( "Client Id", "This is the Client Id you will obtain from your Azure App Registration on the Overview page.", true, "", "", 3 )]
     [TextField( "Client Secret", "This is the Client Secret you will obtain from your Azure App Registration on the Certificates & Secrets page.", true, "", "", 4 )]
     [BooleanField("Enable Debug Mode", "Enabling this will generate exceptions at each point of the authentication process. This is very useful for troubleshooting.", false, "", 5)]
-    public class Okta : AuthenticationComponent
+    public class Okta : AuthenticationComponent, IExternalRedirectAuthentication
     {
         private const string EXCEPTION_DEBUG_TEXT = "Okta Debug";
 
@@ -61,6 +66,11 @@ namespace com.bemaservices.Security.SSO.Authenticators
         public override Boolean IsReturningFromAuthentication( HttpRequest request )
         {
             return ( !String.IsNullOrWhiteSpace( request.QueryString["code"] ) );
+        }
+
+        public bool IsReturningFromExternalAuthentication( IDictionary<string, string> parameters )
+        {
+            return !string.IsNullOrWhiteSpace( parameters.GetValueOrNull( "code" ) );
         }
 
         /// <summary>
@@ -108,7 +118,7 @@ namespace com.bemaservices.Security.SSO.Authenticators
         public override Boolean Authenticate( HttpRequest request, out string username, out string returnUrl )
         {
             username = string.Empty;
-            returnUrl = request.QueryString["redirect_uri"];
+            returnUrl = request.QueryString["state"];
             string redirectUri = GetRedirectUrl( request );
             string issuerURI = GetAttributeValue( "IssuerURI" );
             bool debugModeEnabled = GetAttributeValue( "EnableDebugMode" ).AsBoolean();
@@ -178,6 +188,76 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
         }
 
+        public ExternalRedirectAuthenticationResult Authenticate( ExternalRedirectAuthenticationOptions options )
+        {
+            var result = new ExternalRedirectAuthenticationResult
+            {
+                UserName = string.Empty,
+                ReturnUrl = options.Parameters.GetValueOrNull( "State" )
+            };
+            string issuerURI = GetAttributeValue( "IssuerURI" );
+            bool debugModeEnabled = GetAttributeValue( "EnableDebugMode" ).AsBoolean();
+
+
+            try
+            {
+                // Get a new OAuth Access Token for the 'code' that was returned from the Okta user consent redirect
+                var restClient = new RestClient( issuerURI + "/oauth2/v1/token" );
+                var restRequest = new RestRequest( Method.POST );
+                restRequest.AddParameter( "code", options.Parameters.GetValueOrNull( "code" ) );
+                restRequest.AddParameter( "client_id", GetAttributeValue( "ClientId" ) );
+                restRequest.AddParameter( "client_secret", GetAttributeValue( "ClientSecret" ) );
+                restRequest.AddParameter( "redirect_uri", options.RedirectUrl );
+                restRequest.AddParameter( "grant_type", "authorization_code" );
+                var restResponse = restClient.Execute( restRequest );
+
+                if ( debugModeEnabled )
+                {
+                    var exceptionText = string.Format( "Access Token: {0}", restResponse.Content );
+                    ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                }
+
+                if ( restResponse.StatusCode == HttpStatusCode.OK )
+                {
+                    var accesstokenresponse = JsonConvert.DeserializeObject<Okta_AccessTokenResponse>( restResponse.Content );
+                    string accessToken = accesstokenresponse.access_token;
+
+                    // Get information about the person who logged in using Office 365
+                    restClient = new RestClient( issuerURI + "/oauth2/v1/userinfo" );
+                    restRequest = new RestRequest( Method.POST );
+                    restRequest.AddHeader( "Authorization", string.Format( "Bearer {0}", accessToken ) );
+
+                    restResponse = restClient.Execute( restRequest );
+
+                    if ( debugModeEnabled )
+                    {
+                        var exceptionText = string.Format( "User: {0}", restResponse.Content );
+                        ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                    }
+
+                    if ( restResponse.StatusCode == HttpStatusCode.OK )
+                    {
+                        Okta_User oktaUser = JsonConvert.DeserializeObject<Okta_User>( restResponse.Content );
+                        result.UserName = GetOktaUser( oktaUser, accessToken );
+                        result.IsAuthenticated = !string.IsNullOrWhiteSpace( result.UserName );
+
+                        if ( debugModeEnabled )
+                        {
+                            var exceptionText = string.Format( "UserName: {0}", result.UserName );
+                            ExceptionLogService.LogException( new Exception( exceptionText, new Exception( EXCEPTION_DEBUG_TEXT ) ) );
+                        }
+                    }
+                }
+            }
+
+            catch ( Exception ex )
+            {
+                ExceptionLogService.LogException( ex, HttpContext.Current );
+            }
+
+            return result;
+        }
+
         /// <summary>
         /// Gets the URL of an image that should be displayed.
         /// </summary>
@@ -192,6 +272,22 @@ namespace com.bemaservices.Security.SSO.Authenticators
         {
             Uri uri = new Uri( request.UrlProxySafe().ToString() );
             return uri.Scheme + "://" + uri.GetComponents( UriComponents.HostAndPort, UriFormat.UriEscaped ) + uri.LocalPath;
+        }
+
+        public Uri GenerateExternalLoginUrl( string externalProviderReturnUrl, string successfulAuthenticationRedirectUrl )
+        {
+            string issuerURI = GetAttributeValue( "IssuerURI" );
+            string clientId = GetAttributeValue( "ClientId" );
+            string returnUrl = HttpUtility.UrlEncode( externalProviderReturnUrl );
+            string redirectUri = HttpUtility.UrlEncode( successfulAuthenticationRedirectUrl ?? FormsAuthentication.DefaultUrl );
+            string newUrl = string.Format( "{0}/oauth2/v1/authorize?client_id={1}&redirect_uri={2}&state={3}&response_type=code&scope=openid profile email",
+                issuerURI,
+                clientId,
+                returnUrl,   
+                redirectUri
+            );
+
+            return new Uri( newUrl );
         }
 
         /// <summary>
@@ -340,6 +436,17 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
                 return username;
             }
+        }
+
+        /// <summary>
+        /// Determines whether two-factor authentication is handled by this authentication component.
+        /// </summary>
+        /// <returns>
+        ///   <c>true</c> if two-factor authentication is handled by this authentication component; otherwise, <c>false</c>.
+        /// </returns>
+        public override bool IsConfiguredForTwoFactorAuthentication()
+        {
+            return true;
         }
 
         #region Models
