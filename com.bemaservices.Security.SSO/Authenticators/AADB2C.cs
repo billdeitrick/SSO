@@ -23,17 +23,47 @@ using System.Web;
 namespace com.bemaservices.Security.SSO.Authenticators
 {
     /// <summary>
-    /// Authenticates a user using Azure Active Directory B2C
+    /// Authenticates a user using Azure Active Directory B2C.
     /// </summary>
     [Description("Azure Active Directory B2C Authentication Provider")]
     [Export(typeof(AuthenticationComponent))]
     [ExportMetadata("ComponentName", "AAD B2C")]
 
-    [UrlLinkField("AAD B2C OpenID Connect Metadata Document URI", "URI for the AADB2C OpenID Connect metadatadocument for your user flow.", true, "", "", 1, AttributeKey.OpenIdConnectMetdataURI)]
-    [TextField("Client Id", "This is the Client Id you will obtain from your Azure App Registration on the Overview page.", true, "", "", 2, AttributeKey.ClientId)]
-    [TextField("Client Secret", "This is the Client Secret you will obtain from your Azure App Registration on the Certificates & Secrets page.", true, "", "", 3, AttributeKey.ClientSecret)]
-    [BooleanField("Satisfies MFA Requirement", "Indicates that your configuration of Azure AD B2C satisfies the MFA requirement for Rock Protection Profiles who sign in using an AADB2C account.", false, "", 4, AttributeKey.SatisfiesMFARequirement)]
-    [BooleanField("Enable Debug Mode", "Enabling this will generate exceptions at each point of the authentication process. This is very useful for troubleshooting.", false, "", 5, AttributeKey.EnableDebugMode)]
+    [UrlLinkField(
+        "AAD B2C OpenID Connect Metadata Document URI", "URI for the AADB2C OpenID Connect metadatadocument for your user flow.", 
+        true, 
+        "", 
+        "", 
+        1, 
+        AttributeKey.OpenIdConnectMetdataURI
+        )]
+
+    [TextField(
+        "Client Id", 
+        "This is the Client Id you will obtain from your Azure App Registration on the Overview page.", 
+        true, 
+        "", 
+        "", 
+        2, 
+        AttributeKey.ClientId)]
+
+    [TextField(
+        "Client Secret", 
+        "This is the Client Secret you will obtain from your Azure App Registration on the Certificates & Secrets page.", 
+        true, 
+        "", 
+        "", 
+        3, 
+        AttributeKey.ClientSecret)]
+
+    [BooleanField(
+        "Enable Debug Mode", 
+        "Enabling this will generate exceptions at each point of the authentication process. This is very useful for troubleshooting.", 
+        false, 
+        "", 
+        4, 
+        AttributeKey.EnableDebugMode)]
+
     public class AADB2C : AuthenticationComponent, IExternalRedirectAuthentication
     {
 
@@ -189,14 +219,14 @@ namespace com.bemaservices.Security.SSO.Authenticators
         }
 
         /// <summary>
-        /// Determines whether two-factor authentication is handled by this authentication component. Populated by an attribute for AADB2C.
+        /// Determines whether two-factor authentication is handled by this authentication component.
         /// </summary>
         /// <returns>
         ///   <c>true</c> if two-factor authentication is handled by this authentication component; otherwise, <c>false</c>.
         /// </returns>
         public override bool IsConfiguredForTwoFactorAuthentication()
         {
-            return GetAttributeValue(AttributeKey.SatisfiesMFARequirement).AsBoolean();
+            return true;
         }
 
         # endregion
@@ -308,19 +338,18 @@ namespace com.bemaservices.Security.SSO.Authenticators
             var state = options.Parameters.GetValueOrNull(ParameterKey.State);
 
             // Get all values from the relevant cookies
-            string expectedNonce, expectedState, returnUrl;
-            GetAllCookies(out expectedNonce, out expectedState, out returnUrl);
-
-            // Validate state
-            if ( expectedState.IsNullOrWhiteSpace() || ! state.Equals(expectedState))
-            {
-                // If the state wasn't valid, throw an exception
-                // Relevant cookies will be cleared after the exception is thrown via finally block call.
-                throw new Exception("AADB2C: The state value for the returning authentication request was invalid or not set.");
-            }
+            GetAllCookies(out string expectedNonce, out string expectedState, out string returnUrl);
 
             try
             {
+
+                // Validate state
+                if ( expectedState.IsNullOrWhiteSpace() || ! state.Equals(expectedState))
+                {
+                    // If the state wasn't valid, throw an exception
+                    // Relevant cookies will be cleared after the exception is thrown via finally block call.
+                    throw new Exception("AADB2C: The state value for the returning authentication request was invalid or not set.");
+                }
 
                 // Retrieve the OpenIdConnect configuration for AADB2C
                 var cfg = GetOpenIdConnectConfiguration();
@@ -342,16 +371,12 @@ namespace com.bemaservices.Security.SSO.Authenticators
                 }
 
                 // Validate access token, null token indicates validation failed
-                var claims = ValidateToken( response.IdentityToken, expectedNonce);
-                if ( claims == null )
-                {
-                    throw new Exception("AADB2C: The token failed to validate.");
-                }
+                var claims = ValidateToken( response.IdentityToken, expectedNonce) ?? throw new Exception("AADB2C: The token failed to validate.");
 
                 // If debug mode is enabled, log exception with claims
                 if (debugModeEnabled)
                 {
-                    var exceptionText = $"AADB2C Token Claims: { claims.ToString() }";
+                    var exceptionText = $"AADB2C Token Claims: { claims }";
                     ExceptionLogService.LogException(new Exception(exceptionText, new Exception(EXCEPTION_DEBUG_TEXT)));
                 }
 
@@ -376,7 +401,8 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
             catch (Exception ex)
             {
-                ExceptionLogService.LogException(ex, HttpContext.Current);
+                // Including HTTPContext here seems to prevent the exception from getting written to the db, so we'll leave it out
+                ExceptionLogService.LogException(ex);
             }
             finally
             {
@@ -463,16 +489,18 @@ namespace com.bemaservices.Security.SSO.Authenticators
                     {
                         if (person == null)
                         {
-                            person = new Person();
-                            person.IsSystem = false;
-                            person.RecordTypeValueId = personRecordTypeId;
-                            person.RecordStatusValueId = personStatusPending;
-                            person.FirstName = firstName;
-                            person.LastName = lastName;
-                            person.Email = email;
-                            person.IsEmailActive = true;
-                            person.EmailPreference = EmailPreference.EmailAllowed;
-                            person.Gender = Gender.Unknown;
+                            person = new Person
+                            {
+                                IsSystem = false,
+                                RecordTypeValueId = personRecordTypeId,
+                                RecordStatusValueId = personStatusPending,
+                                FirstName = firstName,
+                                LastName = lastName,
+                                Email = email,
+                                IsEmailActive = true,
+                                EmailPreference = EmailPreference.EmailAllowed,
+                                Gender = Gender.Unknown
+                            };
 
 
                             if (person != null)
@@ -649,7 +677,6 @@ namespace com.bemaservices.Security.SSO.Authenticators
         /// <returns></returns>
         private B2CClaims ValidateToken(string rawToken, string nonce)
         {
-
             var cfg = GetOpenIdConnectConfiguration();
             TokenValidationParameters validationParams = new TokenValidationParameters
             {
@@ -663,9 +690,8 @@ namespace com.bemaservices.Security.SSO.Authenticators
 
             JwtSecurityTokenHandler handler = new JwtSecurityTokenHandler();
             _ = handler.ValidateToken( rawToken, validationParams, out var token);
-            var validToken = token as JwtSecurityToken;
 
-            if ( validToken == null )
+            if (!(token is JwtSecurityToken validToken))
             {
                 ExceptionLogService.LogException(new Exception("AADB2C: Token signature validation failed."));
                 return null;
@@ -689,7 +715,10 @@ namespace com.bemaservices.Security.SSO.Authenticators
                 // The last name / family name from AADB2C
                 FamilyName = validToken.GetClaimValue( JwtClaimTypes.FamilyName ),
                 
-                //
+                // The email address. This is an array (AADB2C deviates from the OIDC standard here)
+                // There's now real way for us to know which email is best here. These claims should
+                // be flattened out so we have multiple with the came type. So, we'll just take the
+                // first one.
                 Email = validToken.Claims.Where(c => c.Type == ClaimsKey.Emails).FirstOrDefault()?.Value
             };
 
