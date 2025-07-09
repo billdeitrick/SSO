@@ -703,6 +703,15 @@ namespace com.bemaservices.Security.SSO.Authenticators
                 return null;
             }
 
+            // Determine the email address claim. This can be tricky depending on the AADB2C flow configuration.
+            // We'll try the email claim first, and fall back to the first item from the emails claim
+            // array if the email claim doesn't have a value.
+            string emailClaim = validToken.GetClaimValue( JwtClaimTypes.Email );
+            if ( emailClaim.IsNullOrWhiteSpace() )
+            {
+                emailClaim = validToken.Claims.Where(c => c.Type == ClaimsKey.Emails).FirstOrDefault()?.Value;
+            }
+
             // Token is valid. Let's create and populate a claims object.
             B2CClaims claims = new B2CClaims
             {
@@ -715,11 +724,8 @@ namespace com.bemaservices.Security.SSO.Authenticators
                 // The last name / family name from AADB2C
                 FamilyName = validToken.GetClaimValue( JwtClaimTypes.FamilyName ),
                 
-                // The email address. This is an array (AADB2C deviates from the OIDC standard here)
-                // There's now real way for us to know which email is best here. These claims should
-                // be flattened out so we have multiple with the came type. So, we'll just take the
-                // first one.
-                Email = validToken.Claims.Where(c => c.Type == ClaimsKey.Emails).FirstOrDefault()?.Value
+                // The email claim, see notes above
+                Email = emailClaim
             };
 
             var validationResult = claims.HasValidClaims();
